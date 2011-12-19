@@ -99,6 +99,7 @@ class ExtensionControllerTest(ExtensionTestCase):
         self.flags(allow_admin_api=True)
         self.ext_list = [
             "AdminActions",
+            "Cloudpipe",
             "Console_output",
             "Createserverext",
             "DeferredDelete",

@@ -214,6 +214,7 @@ class FloatingIP(object):
         instance_id = kwargs.get('instance_id')
         project_id = kwargs.get('project_id')
         requested_networks = kwargs.get('requested_networks')
+        is_bastion = kwargs.get('bastion')
         LOG.debug(_("floating IP allocation for instance |%s|"), instance_id,
                                                                context=context)
         # call the next inherited class's allocate_for_instance()
@@ -221,7 +222,7 @@ class FloatingIP(object):
         # do this first so fixed ip is already allocated
         nw_info = \
                super(FloatingIP, self).allocate_for_instance(context, **kwargs)
-        if FLAGS.auto_assign_floating_ip:
+        if FLAGS.auto_assign_floating_ip or is_bastion:
             # allocate a floating ip
             floating_address = self.allocate_floating_ip(context, project_id)
             # set auto_assigned column to true for the floating ip

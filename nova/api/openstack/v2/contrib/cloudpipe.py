@@ -144,7 +144,7 @@ class Cloudpipe(extensions.ExtensionDescriptor):
 
     name = "Cloudpipe"
     alias = "os-cloudpipe"
-    namespace = "http://docs.openstack.org/compute/ext/cloudpipe/api/v1.1"
+    namespace = "http://docs.openstack.org/ext/cloudpipe/api/v1.1"
     updated = "2011-12-16T00:00:00+00:00"
     admin_only = True
 

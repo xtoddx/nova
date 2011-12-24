@@ -1,0 +1,108 @@
+#!/usr/bin/python
+
+
+"""An init-runnable script that sets up users and keys for bastion access.
+
+This script was built for ubuntu.  It hits a custom metadata endpoint that
+can be added to your paste-deploy config that returns a json object that
+contains a list of project users and their keys.  You will need to add the
+group "bastion" into your image, as it uses the `-g bastion` switch to useradd.
+
+To run this script at startup, you can put the following in /etc/init/bastion-init.conf:
+
+    # bastion-ssh-init - sync users and keys
+    #   crawls metadata service, emits cloud-config
+    start on (mounted MOUNTPOINT=/ and net-device-up IFACE=eth0 and \
+               stopped cloud-init )
+
+    task
+
+    console output
+
+    exec /usr/local/bin/bastion-ssh-init
+
+You can run this from cron as well as at startup, to scan for new users added
+to the project, and to make sure users keys are kept up to date:
+
+    */1 * * * * /usr/local/bin/bastion-ssh-init
+
+"""
+
+
+import json
+import logging
+import os
+import pwd
+import subprocess
+import sys
+import urllib
+
+logging.basicConfig()
+log = logging.getLogger('bastion-ssh-init')
+log.addHandler(logging.StreamHandler(open('/dev/console', 'w')))
+log.setLevel(logging.INFO)
+
+url = 'http://169.254.169.254/latest/bastion-keys'
+
+def make_user(user):
+    # we delete their directory, so this works for a test of userness
+    if not os.path.isdir('/home/%s' % user):
+        try:
+            subprocess.call(['/usr/sbin/useradd', '-m', '-s', '/bin/bash', '-g', 'bastion', user])
+            log.info('Added user: %s' % user)
+        except:
+            log.exception('Unable to add user %s', user)
+            return False
+    if not os.path.isdir('/home/%s/.ssh' % user):
+        try:
+            os.mkdir('/home/%s/.ssh' % user, 0700)
+            pwent = pwd.getpwnam(user)
+            uid = pwent[2]
+            gid = pwent[3]
+            os.chown('/home/%s/.ssh' % user, uid, gid)
+        except:
+            log.exception('Unable to make ~/.ssh for %s', user)
+            remove_user(user)
+            return False
+    return True
+
+def set_user_keys(user, keylist):
+    try:
+        text = "\n".join(keylist.values())
+        open('/home/%s/.ssh/authorized_keys' % user, 'w').write(text)
+        pwent = pwd.getpwnam(user)
+        uid = pwent[2]
+        gid = pwent[3]
+        os.chown('/home/%s/.ssh/authorized_keys' % user, uid, gid)
+        os.chmod('/home/%s/.ssh/authorized_keys' % user, 0600)
+    except:
+        log.exception('Unable to write keys for %s', user)
+        remove_user(user)
+    log.debug('added %i keys for user: %s', len(keylist), user)
+
+def remove_user(user):
+    try:
+        subprocess.call(['/usr/sbin/userdel', '-r', '-f', user])
+        log.info('Removed user: %s', user)
+    except:
+        log.exception('Unable to remove user: %s', user)
+
+if __name__ == '__main__':
+    if '--debug' in sys.argv:
+        log.setLevel(log.DEBUG)
+    remote = None
+    try:
+        remote = urllib.urlopen(url)
+    except IOError, e:
+        log.error('Unable to open %s: %s', url, e)
+        sys.exit(1)
+    data = remote.read()
+    log.debug("READ METADATA: %s", data)
+    ukeys = json.loads(data)
+    remote.close()
+    for user, keylist in ukeys.iteritems():
+        if make_user(user):
+            set_user_keys(user, keylist)
+    for uname in os.listdir('/home'):
+        if uname != 'ubuntu' and uname not in ukeys:
+            remove_user(uname)

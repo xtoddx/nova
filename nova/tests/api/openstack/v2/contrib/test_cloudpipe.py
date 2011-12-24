@@ -48,14 +48,9 @@ class FakeProject(object):
 
 
 def fake_vpn_instance():
-    return {'id': 7, 'image_id': FLAGS.vpn_image_id, 'vm_state': 'active',
+    return {'id': 7, 'image_ref': FLAGS.vpn_image_id, 'vm_state': 'active',
             'created_at': utils.parse_strtime('1981-10-20T00:00:00.000000'),
             'uuid': 7777}
-
-
-def fake_vpn_instance_low_id():
-    return {'id': 4, 'image_id': FLAGS.vpn_image_id, 'vm_state': 'active',
-            'created_at': utils.parse_strtime('1981-10-20T00:00:00.000000')}
 
 
 def fake_project():
@@ -96,11 +91,12 @@ def better_not_call_this(*args, **kwargs):
     raise Exception("You should not have done that")
 
 
-class CloudpipeTest(test.TestCase):
+class CloudpipeVpnTest(test.TestCase):
 
     def setUp(self):
-        super(CloudpipeTest, self).setUp()
-        self.flags(allow_admin_api=True)
+        super(CloudpipeVpnTest, self).setUp()
+        self.flags(allow_admin_api=True, bastion_image_id='bastion',
+                   vpn_image_id='vpn')
         self.controller = cloudpipe.CloudpipeController()
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
@@ -115,30 +111,33 @@ class CloudpipeTest(test.TestCase):
         self.stubs.SmartSet(self.controller.auth_manager, "get_projects",
                             auth_manager_get_projects)
         self.stubs.Set(utils, 'vpn_ping', utils_vpn_ping)
-        self.context = context.get_admin_context()
+        self.admin_context = context.get_admin_context()
+        self.app = fakes.wsgi_app(fake_auth_context=self.admin_context)
         global EMPTY_INSTANCE_LIST
         EMPTY_INSTANCE_LIST = True
 
     def test_cloudpipe_list_none_running(self):
         """Should still get an entry per-project, just less descriptive."""
         req = webob.Request.blank('/v2/123/os-cloudpipe')
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(self.app)
         self.assertEqual(res.status_int, 200)
         res_dict = json.loads(res.body)
         response = {'cloudpipes': [{'project_id': 1, 'public_ip': '127.0.0.1',
-                     'public_port': 22, 'state': 'pending'}]}
+                    'public_port': 22, 'vpn_state': 'pending',
+                    'bastion_state': 'pending'}]}
         self.assertEqual(res_dict, response)
 
     def test_cloudpipe_list(self):
         global EMPTY_INSTANCE_LIST
         EMPTY_INSTANCE_LIST = False
         req = webob.Request.blank('/v2/123/os-cloudpipe')
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(self.app)
         self.assertEqual(res.status_int, 200)
         res_dict = json.loads(res.body)
         response = {'cloudpipes': [{'project_id': 1, 'public_ip': '127.0.0.1',
-                     'public_port': 22, 'state': 'running', 'instance_id': 7777,
-                     'created_at': '1981-10-20T00:00:00Z'}]}
+                     'public_port': 22, 'vpn_state': 'running',
+                     'bastion_state': 'pending', 'vpn_instance_id': 7777,
+                     'vpn_created_at': '1981-10-20T00:00:00Z'}]}
         self.assertEqual(res_dict, response)
 
     def test_cloudpipe_create(self):
@@ -147,7 +146,7 @@ class CloudpipeTest(test.TestCase):
         req.method = 'POST'
         req.body = json.dumps(body)
         req.headers['Content-Type'] = 'application/json'
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(self.app)
         self.assertEqual(res.status_int, 200)
         res_dict = json.loads(res.body)
         response = {'instance_id': 7777}
@@ -163,11 +162,83 @@ class CloudpipeTest(test.TestCase):
         req.method = 'POST'
         req.body = json.dumps(body)
         req.headers['Content-Type'] = 'application/json'
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(self.app)
         self.assertEqual(res.status_int, 200)
         res_dict = json.loads(res.body)
         response = {'instance_id': 7777}
         self.assertEqual(res_dict, response)
+
+
+class CloudpipeBastionTest(test.TestCase):
+
+    def setUp(self):
+        super(CloudpipeBastionTest, self).setUp()
+        self.flags(bastion_image_id='bastion', vpn_image_id='vpn')
+        self.controller = cloudpipe.CloudpipeController()
+        fakes.stub_out_networking(self.stubs)
+        fakes.stub_out_rate_limiting(self.stubs)
+        self.stubs.Set(db, "instance_get_all_by_project",
+                       self._stub_instance_get_all)
+        self.stubs.Set(db, "security_group_exists",
+                       db_security_group_exists)
+        self.stubs.SmartSet(self.controller.cloudpipe,
+                            "launch_bastion_instance",
+                            self._stub_launch)
+        self.stubs.SmartSet(self.controller.auth_manager, "get_project",
+                            auth_manager_get_project)
+        self.stubs.SmartSet(self.controller.auth_manager, "get_projects",
+                            auth_manager_get_projects)
+        self.app = fakes.wsgi_app()
+        self.running_instances = []
+
+    def _fake_instance(self, id=7, image_uuid='bastion'):
+        return {'id': id, 'image_ref': image_uuid, 'vm_state': 'active',
+                'created_at': utils.parse_strtime('1981-10-20T00:00:00.000000'),
+                'uuid': id}
+
+    def _stub_instance_get_all(self, *args, **kwargs):
+        return self.running_instances
+
+    def _stub_launch(self, *args, **kwargs):
+        i = self._fake_instance()
+        self.running_instances.append(i)
+        return i['id']
+
+    def test_cloudpipe_list(self):
+        # fake a running instance
+        self.running_instances.append(self._fake_instance(29))
+        req = webob.Request.blank('/v2/fake/os-cloudpipe')
+        res = req.get_response(self.app)
+        self.assertEqual(res.status_int, 200)
+        res_dict = json.loads(res.body)
+        response = {'cloudpipes': [{'project_id': 1, 'public_ip': '127.0.0.1',
+                     'public_port': 22, 'vpn_state': 'pending',
+                     'bastion_state': 'running', 'bastion_instance_id': 29,
+                     'bastion_created_at': '1981-10-20T00:00:00Z'}]}
+        self.assertEqual(res_dict, response)
+
+    def test_create_bastion(self):
+        req = webob.Request.blank('/v2/fake/os-cloudpipe')
+        req.method = 'POST'
+        res = req.get_response(self.app)
+        self.assertEqual(res.status_int, 200)
+        res_dict = json.loads(res.body)
+        response = {'instance_id': 7}
+        self.assertEqual(res_dict, response)
+
+    def test_create_bastion_already_running(self):
+        # fake an instance with a unique id
+        self.running_instances.append(self._fake_instance(999))
+        self.stubs.SmartSet(self.controller.cloudpipe, 'launch_vpn_instance',
+                            better_not_call_this)
+        req = webob.Request.blank('/v2/fake/os-cloudpipe')
+        req.method = 'POST'
+        res = req.get_response(self.app)
+        self.assertEqual(res.status_int, 200)
+        res_dict = json.loads(res.body)
+        response = {'instance_id': 999}
+        self.assertEqual(res_dict, response)
+
 
 class CloudpipesXMLSerializerTest(test.TestCase):
     def setUp(self):
@@ -215,3 +286,4 @@ class CloudpipesXMLSerializerTest(test.TestCase):
                   '<cloudpipe><project_id>4321</project_id></cloudpipe>')
         result = self.deserializer.deserialize(intext)['body']
         self.assertEqual(result, exemplar)
+

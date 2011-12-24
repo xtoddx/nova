@@ -336,6 +336,9 @@ DEFINE_string('null_kernel', 'nokernel',
               'kernel image that indicates not to use a kernel,'
               ' but to use a raw disk image instead')
 
+DEFINE_string('bastion_image_id', '0', 'image id for cloudpipe bastion server')
+DEFINE_string('bastion_secgroup_suffix', '_bastion',
+              'string to be contained in bastion security group name')
 DEFINE_string('vpn_image_id', '0', 'image id for cloudpipe vpn server')
 DEFINE_string('vpn_key_suffix',
               '-vpn',

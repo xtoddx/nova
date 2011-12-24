@@ -456,9 +456,11 @@ class ComputeManager(manager.SchedulerDependentManager):
                               vm_state=vm_states.BUILDING,
                               task_state=task_states.NETWORKING)
         is_vpn = instance['image_ref'] == str(FLAGS.vpn_image_id)
+        is_bastion = instance['image_ref'] == str(FLAGS.bastion_image_id)
         try:
             network_info = self.network_api.allocate_for_instance(
                                 context, instance, vpn=is_vpn,
+                                bastion=is_bastion,
                                 requested_networks=requested_networks)
         except:
             msg = _("Instance %s failed network setup")

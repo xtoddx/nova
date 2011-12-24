@@ -27,6 +27,8 @@ import string
 import tempfile
 import zipfile
 
+from nova import compute
+from nova.compute import instance_types
 from nova import context
 from nova import crypto
 from nova import db
@@ -148,3 +150,46 @@ class CloudPipe(object):
         except (exception.Duplicate, os.error, IOError):
             pass
         return key_name
+
+    def launch_bastion_instance(self, project, compute_api=None):
+        LOG.debug(_("Launching Bastion for %s") % (project.id))
+        if compute_api is None:
+          compute_api = compute.API()
+        ctxt = context.RequestContext(user_id=project.project_manager_id,
+                                      project_id=project.id)
+        group_name = self.setup_bastion_security_group(ctxt)
+        i_type = instance_types.get_instance_type_by_name('m1.tiny')
+        reservation = compute_api.create(ctxt,
+                instance_type=i_type,
+                image_href=FLAGS.bastion_image_id,
+                min_count=1,
+                max_count=1,
+                security_group=[group_name])
+        return reservation
+
+    def setup_bastion_security_group(self, context):
+        group_name = '%s%s' % (context.project_id,
+                               FLAGS.bastion_secgroup_suffix)
+        if db.security_group_exists(context, context.project_id, group_name):
+            return group_name
+        group = {'user_id': context.user_id,
+                 'project_id': context.project_id,
+                 'name': group_name,
+                 'description': 'Group for bastion'}
+        group_ref = db.security_group_create(context, group)
+        rule = {'parent_group_id': group_ref['id'],
+                'cidr': '0.0.0.0/0',
+                'protocol': 'tcp',
+                'from_port': 22,
+                'to_port': 22}
+        db.security_group_rule_create(context, rule)
+        rule = {'parent_group_id': group_ref['id'],
+                'cidr': '0.0.0.0/0',
+                'protocol': 'icmp',
+                'from_port': -1,
+                'to_port': -1}
+        db.security_group_rule_create(context, rule)
+        # NOTE(vish): No need to trigger the group since the instance
+        #             has not been run yet.
+        return group_name
+

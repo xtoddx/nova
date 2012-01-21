@@ -351,14 +351,27 @@ class GenericUtilsTestCase(test.TestCase):
         fake_contents = "lorem ipsum"
         fake_file = self.mox.CreateMockAnything()
         fake_file.read().AndReturn(fake_contents)
-        __builtin__.open(mox.IgnoreArg()).AndReturn(fake_file)
+        fake_context_manager = self.mox.CreateMockAnything()
+        fake_context_manager.__enter__().AndReturn(fake_file)
+        fake_context_manager.__exit__(mox.IgnoreArg(),
+                                      mox.IgnoreArg(),
+                                      mox.IgnoreArg())
+
+        __builtin__.open(mox.IgnoreArg()).AndReturn(fake_context_manager)
 
         self.mox.ReplayAll()
         cache_data = {"data": 1123, "mtime": 1}
-        data = utils.read_cached_file("/this/is/a/fake", cache_data)
-        self.mox.VerifyAll()
+        self.reload_called = False
+
+        def test_reload(reloaded_data):
+            self.assertEqual(reloaded_data, fake_contents)
+            self.reload_called = True
+
+        data = utils.read_cached_file("/this/is/a/fake", cache_data,
+                                      reload_func=test_reload)
         self.mox.UnsetStubs()
         self.assertEqual(data, fake_contents)
+        self.assertTrue(self.reload_called)
 
 
 class IsUUIDLikeTestCase(test.TestCase):

@@ -827,7 +827,8 @@ class ComputeTestCase(BaseTestCase):
         self.compute.network_api.allocate_for_instance(mox.IgnoreArg(),
                                                        mox.IgnoreArg(),
                                                        requested_networks=None,
-                                                       vpn=False).\
+                                                       vpn=False,
+                                                       bastion=False).\
             AndRaise(quantum_client.QuantumServerException())
 
         FLAGS.stub_network = False

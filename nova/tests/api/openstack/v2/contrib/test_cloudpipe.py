@@ -19,6 +19,8 @@ import json
 import webob
 from lxml import etree
 
+from nova.api import auth
+from nova.api.openstack import v2
 from nova.api.openstack.v2 import wsgi
 from nova.api.openstack.v2.contrib import cloudpipe
 from nova.auth import manager
@@ -75,14 +77,6 @@ def pipelib_launch_vpn_instance(self, project_id, user_id):
     EMPTY_INSTANCE_LIST = False
 
 
-def auth_manager_get_project(self, project_id):
-    return fake_project()
-
-
-def auth_manager_get_projects(self):
-    return [fake_project()]
-
-
 def utils_vpn_ping(addr, port, timoeout=0.05, session_id=None):
     return True
 
@@ -91,13 +85,25 @@ def better_not_call_this(*args, **kwargs):
     raise Exception("You should not have done that")
 
 
+class FakeAuthManager(object):
+    def get_projects(self):
+        return [fake_project()]
+
+    def get_project(self, project_id):
+        return fake_project()
+
+
 class CloudpipeVpnTest(test.TestCase):
 
     def setUp(self):
         super(CloudpipeVpnTest, self).setUp()
         self.flags(allow_admin_api=True, bastion_image_id='bastion',
                    vpn_image_id='vpn')
-        self.controller = cloudpipe.CloudpipeController()
+        self.admin_context = context.get_admin_context()
+        inner_app = v2.APIRouter()
+        self.app = auth.InjectContext(self.admin_context, inner_app)
+        route = inner_app.map.match('/1234/os-cloudpipe')
+        self.controller = route['controller'].controller
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
         self.stubs.Set(db, "instance_get_all_by_project",
@@ -106,19 +112,14 @@ class CloudpipeVpnTest(test.TestCase):
                        db_security_group_exists)
         self.stubs.SmartSet(self.controller.cloudpipe, "launch_vpn_instance",
                             pipelib_launch_vpn_instance)
-        self.stubs.SmartSet(self.controller.auth_manager, "get_project",
-                            auth_manager_get_project)
-        self.stubs.SmartSet(self.controller.auth_manager, "get_projects",
-                            auth_manager_get_projects)
+        self.controller.auth_manager = FakeAuthManager()
         self.stubs.Set(utils, 'vpn_ping', utils_vpn_ping)
-        self.admin_context = context.get_admin_context()
-        self.app = fakes.wsgi_app(fake_auth_context=self.admin_context)
         global EMPTY_INSTANCE_LIST
         EMPTY_INSTANCE_LIST = True
 
     def test_cloudpipe_list_none_running(self):
         """Should still get an entry per-project, just less descriptive."""
-        req = webob.Request.blank('/v2/123/os-cloudpipe')
+        req = webob.Request.blank('/123/os-cloudpipe')
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 200)
         res_dict = json.loads(res.body)
@@ -130,7 +131,7 @@ class CloudpipeVpnTest(test.TestCase):
     def test_cloudpipe_list(self):
         global EMPTY_INSTANCE_LIST
         EMPTY_INSTANCE_LIST = False
-        req = webob.Request.blank('/v2/123/os-cloudpipe')
+        req = webob.Request.blank('/123/os-cloudpipe')
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 200)
         res_dict = json.loads(res.body)
@@ -142,7 +143,7 @@ class CloudpipeVpnTest(test.TestCase):
 
     def test_cloudpipe_create(self):
         body = {'cloudpipe': {'project_id': 1}}
-        req = webob.Request.blank('/v2/123/os-cloudpipe')
+        req = webob.Request.blank('/123/os-cloudpipe')
         req.method = 'POST'
         req.body = json.dumps(body)
         req.headers['Content-Type'] = 'application/json'
@@ -158,7 +159,7 @@ class CloudpipeVpnTest(test.TestCase):
         self.stubs.SmartSet(self.controller.cloudpipe, 'launch_vpn_instance',
                             better_not_call_this)
         body = {'cloudpipe': {'project_id': 1}}
-        req = webob.Request.blank('/v2/123/os-cloudpipe')
+        req = webob.Request.blank('/123/os-cloudpipe')
         req.method = 'POST'
         req.body = json.dumps(body)
         req.headers['Content-Type'] = 'application/json'
@@ -174,7 +175,10 @@ class CloudpipeBastionTest(test.TestCase):
     def setUp(self):
         super(CloudpipeBastionTest, self).setUp()
         self.flags(bastion_image_id='bastion', vpn_image_id='vpn')
-        self.controller = cloudpipe.CloudpipeController()
+        v2_app = v2.APIRouter()
+        self.app = fakes.wsgi_app(v2_app)
+        route = v2_app.map.match('/1234/os-cloudpipe')
+        self.controller = route['controller'].controller
         fakes.stub_out_networking(self.stubs)
         fakes.stub_out_rate_limiting(self.stubs)
         self.stubs.Set(db, "instance_get_all_by_project",
@@ -184,11 +188,7 @@ class CloudpipeBastionTest(test.TestCase):
         self.stubs.SmartSet(self.controller.cloudpipe,
                             "launch_bastion_instance",
                             self._stub_launch)
-        self.stubs.SmartSet(self.controller.auth_manager, "get_project",
-                            auth_manager_get_project)
-        self.stubs.SmartSet(self.controller.auth_manager, "get_projects",
-                            auth_manager_get_projects)
-        self.app = fakes.wsgi_app()
+        self.controller.auth_manager = FakeAuthManager()
         self.running_instances = []
 
     def _fake_instance(self, id=7, image_uuid='bastion'):

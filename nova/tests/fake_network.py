@@ -15,6 +15,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import nova.context
 from nova import db
 from nova import exception
 from nova import flags
@@ -265,4 +266,6 @@ def fake_get_instance_nw_info(stubs, num_networks=1, ips_per_vif=2,
     stubs.Set(db, 'instance_type_get', instance_type_fake)
     stubs.Set(db, 'network_get', network_get_fake)
 
-    return network.get_instance_nw_info(None, 0, 0, None)
+    context = nova.context.RequestContext('testuser', 'testproject',
+                                          is_admin=False)
+    return network.get_instance_nw_info(context, 0, 0, None)

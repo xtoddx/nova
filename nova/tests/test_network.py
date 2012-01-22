@@ -20,6 +20,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import log as logging
+import nova.policy
 from nova import rpc
 from nova import test
 from nova import utils
@@ -236,7 +237,7 @@ class FlatNetworkTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         self.assertRaises(exception.FixedIpInvalid,
-                          self.network.validate_networks, None,
+                          self.network.validate_networks, self.context,
                           requested_networks)
 
     def test_validate_networks_empty_fixed_ip(self):
@@ -249,7 +250,7 @@ class FlatNetworkTestCase(test.TestCase):
 
         self.assertRaises(exception.FixedIpInvalid,
                           self.network.validate_networks,
-                          None, requested_networks)
+                          self.context, requested_networks)
 
     def test_validate_networks_none_fixed_ip(self):
         self.mox.StubOutWithMock(db, 'network_get_all_by_uuids')
@@ -259,7 +260,7 @@ class FlatNetworkTestCase(test.TestCase):
                                     mox.IgnoreArg()).AndReturn(networks)
         self.mox.ReplayAll()
 
-        self.network.validate_networks(None, requested_networks)
+        self.network.validate_networks(self.context, requested_networks)
 
     def test_add_fixed_ip_instance_without_vpn_requested_networks(self):
         self.mox.StubOutWithMock(db, 'network_get')
@@ -761,12 +762,17 @@ class VlanNetworkTestCase(test.TestCase):
 
 
 class CommonNetworkTestCase(test.TestCase):
+
+    def setUp(self):
+        super(CommonNetworkTestCase, self).setUp()
+        self.context = context.RequestContext('fake', 'fake')
+
     def fake_create_fixed_ips(self, context, network_id):
         return None
 
     def test_remove_fixed_ip_from_instance(self):
         manager = fake_network.FakeNetworkManager()
-        manager.remove_fixed_ip_from_instance(None, 99, '10.0.0.1')
+        manager.remove_fixed_ip_from_instance(self.context, 99, '10.0.0.1')
 
         self.assertEquals(manager.deallocate_called, '10.0.0.1')
 
@@ -774,7 +780,7 @@ class CommonNetworkTestCase(test.TestCase):
         manager = fake_network.FakeNetworkManager()
         self.assertRaises(exception.FixedIpNotFoundForSpecificInstance,
                           manager.remove_fixed_ip_from_instance,
-                          None, 99, 'bad input')
+                          self.context, 99, 'bad input')
 
     def test_validate_cidrs(self):
         manager = fake_network.FakeNetworkManager()
@@ -1138,3 +1144,32 @@ class FloatingIPTestCase(test.TestCase):
                 instance_id=instance_ref['id'])
         self.network.deallocate_for_instance(self.context,
                 instance_id=instance_ref['id'])
+
+
+class NetworkPolicyTestCase(test.TestCase):
+    def setUp(self):
+        super(NetworkPolicyTestCase, self).setUp()
+
+        nova.policy.reset()
+        nova.policy.init()
+
+        self.context = context.get_admin_context()
+
+    def tearDown(self):
+        super(NetworkPolicyTestCase, self).tearDown()
+        nova.policy.reset()
+
+    def _set_rules(self, rules):
+        nova.common.policy.set_brain(nova.common.policy.HttpBrain(rules))
+
+    def test_check_policy(self):
+        self.mox.StubOutWithMock(nova.policy, 'enforce')
+        target = {
+            'project_id': self.context.project_id,
+            'user_id': self.context.user_id,
+        }
+        nova.policy.enforce(self.context, 'network:get_all', target)
+        self.mox.ReplayAll()
+        network_manager.check_policy(self.context, 'get_all')
+        self.mox.UnsetStubs()
+        self.mox.VerifyAll()

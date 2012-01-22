@@ -193,7 +193,7 @@ class AdminRequired(NotAuthorized):
 
 
 class PolicyNotAuthorized(NotAuthorized):
-    message = _("Policy Doesn't allow %(action)s to be performed.")
+    message = _("Policy doesn't allow %(action)s to be performed.")
 
 
 class InstanceBusy(NovaException):

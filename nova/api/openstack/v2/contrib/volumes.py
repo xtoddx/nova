@@ -109,7 +109,8 @@ class VolumeController(object):
         LOG.audit(_("Delete volume with id: %s"), id, context=context)
 
         try:
-            self.volume_api.delete(context, volume_id=id)
+            volume = self.volume_api.get(context, id)
+            self.volume_api.delete(context, volume)
         except exception.NotFound:
             raise exc.HTTPNotFound()
         return webob.Response(status_int=202)
@@ -138,26 +139,34 @@ class VolumeController(object):
         if not body:
             raise exc.HTTPUnprocessableEntity()
 
-        vol = body['volume']
-        size = vol['size']
+        volume = body['volume']
+        size = volume['size']
         LOG.audit(_("Create volume of %s GB"), size, context=context)
 
-        vol_type = vol.get('volume_type', None)
-        if vol_type:
+        kwargs = {}
+
+        req_volume_type = volume.get('volume_type', None)
+        if req_volume_type:
             try:
-                vol_type = volume_types.get_volume_type_by_name(context,
-                                                                vol_type)
+                kwargs['volume_type'] = volume_types.get_volume_type_by_name(
+                        context, req_volume_type)
             except exception.NotFound:
                 raise exc.HTTPNotFound()
 
-        metadata = vol.get('metadata', None)
+        kwargs['metadata'] = volume.get('metadata', None)
 
-        new_volume = self.volume_api.create(context, size,
-                                            vol.get('snapshot_id'),
-                                            vol.get('display_name'),
-                                            vol.get('display_description'),
-                                            volume_type=vol_type,
-                                            metadata=metadata)
+        snapshot_id = volume.get('snapshot_id')
+        if snapshot_id is not None:
+            snapshot = self.volume_api.get_snapshot(context, snapshot_id)
+        else:
+            snapshot = None
+
+        new_volume = self.volume_api.create(context,
+                                            size,
+                                            snapshot,
+                                            volume.get('display_name'),
+                                            volume.get('display_description'),
+                                            **kwargs)
 
         # Work around problem that instance is lazy-loaded...
         new_volume = self.volume_api.get(context, new_volume['id'])
@@ -444,7 +453,8 @@ class SnapshotController(object):
         LOG.audit(_("Delete snapshot with id: %s"), id, context=context)
 
         try:
-            self.volume_api.delete_snapshot(context, snapshot_id=id)
+            snapshot = self.volume_api.get_snapshot(context, id)
+            self.volume_api.delete_snapshot(context, snapshot)
         except exception.NotFound:
             return exc.HTTPNotFound()
         return webob.Response(status_int=202)
@@ -475,18 +485,19 @@ class SnapshotController(object):
 
         snapshot = body['snapshot']
         volume_id = snapshot['volume_id']
+        volume = self.volume_api.get(context, volume_id)
         force = snapshot.get('force', False)
-        LOG.audit(_("Create snapshot from volume %s"), volume_id,
-                context=context)
+        msg = _("Create snapshot from volume %s")
+        LOG.audit(msg, volume_id, context=context)
 
         if force:
             new_snapshot = self.volume_api.create_snapshot_force(context,
-                                        volume_id,
+                                        volume,
                                         snapshot.get('display_name'),
                                         snapshot.get('display_description'))
         else:
             new_snapshot = self.volume_api.create_snapshot(context,
-                                        volume_id,
+                                        volume,
                                         snapshot.get('display_name'),
                                         snapshot.get('display_description'))
 

@@ -350,16 +350,18 @@ class CloudController(object):
         LOG.audit(_("Create snapshot of volume %s"), volume_id,
                   context=context)
         volume_id = ec2utils.ec2_id_to_id(volume_id)
+        volume = self.volume_api.get(context, volume_id)
         snapshot = self.volume_api.create_snapshot(
                 context,
-                volume_id=volume_id,
-                name=kwargs.get('display_name'),
-                description=kwargs.get('display_description'))
+                volume,
+                kwargs.get('display_name'),
+                kwargs.get('display_description'))
         return self._format_snapshot(context, snapshot)
 
     def delete_snapshot(self, context, snapshot_id, **kwargs):
         snapshot_id = ec2utils.ec2_id_to_id(snapshot_id)
-        self.volume_api.delete_snapshot(context, snapshot_id=snapshot_id)
+        snapshot = self.volume_api.get_snapshot(context, snapshot_id)
+        self.volume_api.delete_snapshot(context, snapshot)
         return True
 
     def describe_key_pairs(self, context, key_name=None, **kwargs):
@@ -834,7 +836,7 @@ class CloudController(object):
             volumes = []
             for ec2_id in volume_id:
                 internal_id = ec2utils.ec2_id_to_id(ec2_id)
-                volume = self.volume_api.get(context, volume_id=internal_id)
+                volume = self.volume_api.get(context, internal_id)
                 volumes.append(volume)
         else:
             volumes = self.volume_api.get_all(context)
@@ -884,18 +886,20 @@ class CloudController(object):
         size = kwargs.get('size')
         if kwargs.get('snapshot_id') != None:
             snapshot_id = ec2utils.ec2_id_to_id(kwargs['snapshot_id'])
+            snapshot = self.volume_api.get_snapshot(context, snapshot_id)
             LOG.audit(_("Create volume from snapshot %s"), snapshot_id,
                       context=context)
         else:
             snapshot_id = None
+            snapshot = None
             LOG.audit(_("Create volume of %s GB"), size, context=context)
 
         volume = self.volume_api.create(
                 context,
-                size=size,
-                snapshot_id=snapshot_id,
-                name=kwargs.get('display_name'),
-                description=kwargs.get('display_description'))
+                size,
+                kwargs.get('display_name'),
+                kwargs.get('display_description'),
+                snapshot)
         # TODO(vish): Instance should be None at db layer instead of
         #             trying to lazy load, but for now we turn it into
         #             a dict to avoid an error.
@@ -903,7 +907,8 @@ class CloudController(object):
 
     def delete_volume(self, context, volume_id, **kwargs):
         volume_id = ec2utils.ec2_id_to_id(volume_id)
-        self.volume_api.delete(context, volume_id=volume_id)
+        volume = self.volume_api.get(context, volume_id)
+        self.volume_api.delete(context, volume)
         return True
 
     def update_volume(self, context, volume_id, **kwargs):
@@ -914,9 +919,8 @@ class CloudController(object):
             if field in kwargs:
                 changes[field] = kwargs[field]
         if changes:
-            self.volume_api.update(context,
-                                   volume_id=volume_id,
-                                   fields=changes)
+            volume = self.volume_api.get(context, volume_id)
+            self.volume_api.update(context, volume, fields=changes)
         return True
 
     def attach_volume(self, context, volume_id, instance_id, device, **kwargs):
@@ -927,7 +931,7 @@ class CloudController(object):
                 " at %(device)s") % locals()
         LOG.audit(msg, context=context)
         self.compute_api.attach_volume(context, instance, volume_id, device)
-        volume = self.volume_api.get(context, volume_id=volume_id)
+        volume = self.volume_api.get(context, volume_id)
         return {'attachTime': volume['attach_time'],
                 'device': volume['mountpoint'],
                 'instanceId': ec2utils.id_to_ec2_id(instance_id),
@@ -1070,7 +1074,7 @@ class CloudController(object):
                 assert not bdm['virtual_name']
                 root_device_type = 'ebs'
 
-            vol = self.volume_api.get(context, volume_id=volume_id)
+            vol = self.volume_api.get(context, volume_id)
             LOG.debug(_("vol = %s\n"), vol)
             # TODO(yamahata): volume attach time
             ebs = {'volumeId': volume_id,
@@ -1605,13 +1609,13 @@ class CloudController(object):
             volume_id = m.get('volume_id')
             if m.get('snapshot_id') and volume_id:
                 # create snapshot based on volume_id
-                vol = self.volume_api.get(context, volume_id=volume_id)
+                volume = self.volume_api.get(context, volume_id)
                 # NOTE(yamahata): Should we wait for snapshot creation?
                 #                 Linux LVM snapshot creation completes in
                 #                 short time, it doesn't matter for now.
                 snapshot = self.volume_api.create_snapshot_force(
-                    context, volume_id=volume_id, name=vol['display_name'],
-                    description=vol['display_description'])
+                        context, volume, volume['display_name'],
+                        volume['display_description'])
                 m['snapshot_id'] = snapshot['id']
                 del m['volume_id']
 

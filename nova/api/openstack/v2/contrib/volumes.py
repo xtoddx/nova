@@ -163,9 +163,9 @@ class VolumeController(object):
 
         new_volume = self.volume_api.create(context,
                                             size,
-                                            snapshot,
                                             volume.get('display_name'),
                                             volume.get('display_description'),
+                                            snapshot,
                                             **kwargs)
 
         # Work around problem that instance is lazy-loaded...

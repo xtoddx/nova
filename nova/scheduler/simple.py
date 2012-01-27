@@ -24,6 +24,7 @@ Simple Scheduler
 from nova import db
 from nova import flags
 from nova import exception
+from nova import log as logging
 from nova.scheduler import driver
 from nova.scheduler import chance
 
@@ -40,6 +41,9 @@ flags.DEFINE_list('isolated_images', [], 'Images to run on isolated host')
 flags.DEFINE_list('isolated_hosts', [], 'Host reserved for specific images')
 flags.DEFINE_boolean('skip_isolated_core_check', True,
                      'Allow overcommitting vcpus on isolated hosts')
+
+
+LOG = logging.getLogger('nova.scheduler.simple')
 
 
 class SimpleScheduler(chance.ChanceScheduler):
@@ -108,22 +112,36 @@ class SimpleScheduler(chance.ChanceScheduler):
         driver.cast_to_compute_host(context, host, 'start_instance',
                 instance_id=instance_id, **_kwargs)
 
-    def schedule_create_volume(self, context, volume_id, *_args, **_kwargs):
-        """Picks a host that is up and has the fewest volumes."""
+    def schedule_create_volume(self, context, volume_id, *_args, **kwargs):
+        """Picks a host that is up and has the fewest volumes.
+
+        Volumes from snapshots run where the snapshot is.
+        """
         elevated = context.elevated()
 
         volume_ref = db.volume_get(context, volume_id)
-        availability_zone = volume_ref.get('availability_zone')
+        snapshot_id = kwargs.get('snapshot_id', None)
+        LOG.debug(_("Scheduling volume (snapshot=%s)"), snapshot_id)
+        if snapshot_id:
+            snapshot_ref = db.snapshot_get(context, snapshot_id)
+            snapped_volume_ref = db.volume_get(context,
+                                               snapshot_ref['volume_id'])
+            host = snapped_volume_ref['host']
+        else:
+            host = None
 
-        zone, host = None, None
+        zone = None
+        availability_zone = volume_ref.get('availability_zone')
         if availability_zone:
-            zone, _x, host = availability_zone.partition(':')
-        if host and context.is_admin:
+            zone, _x, host_new = availability_zone.partition(':')
+            if host_new and context.is_admin:
+                host = host_new
+        if host:
             service = db.service_get_by_args(elevated, host, 'nova-volume')
             if not self.service_is_up(service):
                 raise exception.WillNotSchedule(host=host)
             driver.cast_to_volume_host(context, host, 'create_volume',
-                    volume_id=volume_id, **_kwargs)
+                    volume_id=volume_id, **kwargs)
             return None
 
         results = db.service_get_all_volume_sorted(elevated)
@@ -137,10 +155,23 @@ class SimpleScheduler(chance.ChanceScheduler):
                 raise exception.NoValidHost(reason=msg)
             if self.service_is_up(service):
                 driver.cast_to_volume_host(context, service['host'],
-                        'create_volume', volume_id=volume_id, **_kwargs)
+                        'create_volume', volume_id=volume_id, **kwargs)
                 return None
         msg = _("Is the appropriate service running?")
         raise exception.NoValidHost(reason=msg)
+
+    def schedule_create_snapshot(self, context, volume_id, *_args, **kwargs):
+        """Runs where the volume is."""
+        elevated = context.elevated()
+
+        volume_ref = db.volume_get(context, volume_id)
+        host = volume_ref['host']
+        service = db.service_get_by_args(elevated, host, 'nova-volume')
+        if not self.service_is_up(service):
+            raise exception.WillNotSchedule(host=host)
+        driver.cast_to_volume_host(context, host, 'create_snapshot',
+                volume_id=volume_id, **kwargs)
+        return None
 
     def schedule_set_network_host(self, context, *_args, **_kwargs):
         """Picks a host that is up and has the fewest networks."""

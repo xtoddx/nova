@@ -68,5 +68,5 @@ class BastionKeyMetadata(wsgi.Application):
         for uid in users_in_project:
             rv[uid] = {}
             for key in db.key_pair_get_all_by_user(ctxt, uid):
-                rv[uid][key['name']] = key['public_key']
+                rv[uid][key['name']] = key['public_key'].strip()
         return json.dumps(rv)

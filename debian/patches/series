@@ -1,0 +1,8 @@
+floating_ip_garp_default.patch
+zoneaware_simplescheduler.patch
+ec2fixes.patch
+default_schedule_zone.patch
+nova-manage_flagfile_location.patch
+packaged-ajaxterm-calls.patch
+allocate-fixed-ip.patch
+availability_zones.patch
